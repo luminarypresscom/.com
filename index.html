@@ -345,6 +345,13 @@ footer{background:var(--ink-deep);border-top:1px solid var(--line);padding:70px 
 .chat-input-row button:hover{background:var(--gold-light)}
 .chat-input-row svg{width:16px;height:16px}
 
+.chat-input-row input:disabled{opacity:.5;cursor:not-allowed}
+.chat-typing{display:flex;gap:4px;padding:11px 14px;background:var(--ink);border-radius:14px;border-bottom-left-radius:4px;align-self:flex-start;width:fit-content}
+.chat-typing span{width:6px;height:6px;border-radius:50%;background:var(--paper-faint);animation:chatTyping 1.2s infinite ease-in-out}
+.chat-typing span:nth-child(2){animation-delay:.15s}
+.chat-typing span:nth-child(3){animation-delay:.3s}
+@keyframes chatTyping{0%,60%,100%{opacity:.3;transform:translateY(0)}30%{opacity:1;transform:translateY(-3px)}}
+
 @media(max-width:480px){
   .chat-panel{right:16px;left:16px;width:auto;bottom:92px}
   .chat-launcher{right:16px;bottom:16px}
@@ -778,21 +785,14 @@ footer{background:var(--ink-deep);border-top:1px solid var(--line);padding:70px 
       <div class="chat-head-status">Typically replies within a day</div>
     </div>
   </div>
-  <div class="chat-body" id="chatBody">
-    <div class="chat-bubble bot">Hi there 👋 I'm here to help with questions about your book marketing campaign. Pick a question below, or type your own message.</div>
-    <div class="chat-quick" id="chatQuick">
-      <button class="chat-chip" data-q="Do you work with self-published authors?" data-a="Yes — we work with self-published, hybrid, and traditionally published authors alike.">Self-published authors?</button>
-      <button class="chat-chip" data-q="How much does it cost?" data-a="Our packages start at $350, with Growth at $1,750 and Signature at $3,400. Check the Packages section for what's included at each tier.">Pricing?</button>
-      <button class="chat-chip" data-q="How long does a campaign take?" data-a="Timelines are built around your launch date during the free consultation — some authors start months ahead, others closer to launch.">Timeline?</button>
-      <button class="chat-chip" data-q="Do you design book covers?" data-a="Yes — cover design is part of our creative work. Take a look at our Portfolio section above.">Cover design?</button>
-    </div>
-  </div>
+  <div class="chat-body" id="chatBody"></div>
   <div class="chat-input-row">
     <input type="text" id="chatInput" placeholder="Type your message..." maxlength="400">
     <button id="chatSend" aria-label="Send message"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 2 11 13M22 2l-7 20-4-9-9-4 20-7Z"/></svg></button>
   </div>
 </div>
 
+<script src="https://cdn.jsdelivr.net/npm/@emailjs/browser@4/dist/email.min.js"></script>
 <script>
 // scroll progress
 const bar=document.getElementById('scroll-progress');
@@ -895,6 +895,45 @@ document.querySelectorAll('.faq-item').forEach(item=>{
   const sendBtn = document.getElementById('chatSend');
   const CONTACT_EMAIL = 'luminarypress.connect@gmail.com';
 
+  // ── EmailJS setup (optional but recommended) ──────────────────────────
+  // Sign up free at emailjs.com, connect your Gmail, create a template with
+  // {{from_name}}, {{from_email}}, {{message}} variables, then fill these in.
+  // Until filled in, escalations fall back to opening a pre-filled mailto.
+  const EMAILJS_PUBLIC_KEY  = 'YOUR_PUBLIC_KEY';
+  const EMAILJS_SERVICE_ID  = 'YOUR_SERVICE_ID';
+  const EMAILJS_TEMPLATE_ID = 'YOUR_TEMPLATE_ID';
+  const EMAILJS_READY = ![EMAILJS_PUBLIC_KEY, EMAILJS_SERVICE_ID, EMAILJS_TEMPLATE_ID].some(v => v.startsWith('YOUR_'));
+  if(EMAILJS_READY && window.emailjs){ emailjs.init(EMAILJS_PUBLIC_KEY); }
+
+  // ── FAQ knowledge base (matched by keyword against free-typed messages) ─
+  const FAQ = [
+    { keys: ['self-published','self published','hybrid','traditionally published','indie'],
+      a: "Yes — we work with self-published, hybrid, and traditionally published authors alike." },
+    { keys: ['cost','price','pricing','how much','fee','package'],
+      a: "Our packages start at $350, with Growth at $1,750 and Signature at $3,400. Check the Packages section on the page above for what's included at each tier." },
+    { keys: ['how long','timeline','duration','take'],
+      a: "Timelines are built around your launch date during the free consultation — some authors start months ahead, others closer to launch." },
+    { keys: ['cover','design'],
+      a: "Yes — cover design is part of our creative work. Take a look at our Portfolio section above." },
+    { keys: ['genre','genres'],
+      a: "We've worked across fiction, romance, and a range of debut and established genres — every strategy is built around your specific readers." },
+    { keys: ['consultation','get started','start','begin'],
+      a: "You can book a free consultation any time using the \"Free Consultation\" button at the top of the page — we'll talk through your book and goals." },
+  ];
+  const HUMAN_TRIGGERS = ['human','agent','person','someone','representative','talk to','speak to','speak with','real person','manager','team member'];
+
+  const QUICK_REPLIES = [
+    { q: "Do you work with self-published authors?" },
+    { q: "How much does it cost?" },
+    { q: "How long does a campaign take?" },
+    { q: "Do you design book covers?" },
+    { q: "I'd like to speak with a human" },
+  ];
+
+  // ── Conversation state ──────────────────────────────────────────────
+  let stage = 'ask_name'; // ask_name -> ask_email -> chatting
+  let visitor = { name: '', email: '' };
+
   function scrollToBottom(){ body.scrollTop = body.scrollHeight; }
 
   function addBubble(text, who){
@@ -903,34 +942,158 @@ document.querySelectorAll('.faq-item').forEach(item=>{
     el.textContent = text;
     body.appendChild(el);
     scrollToBottom();
+    return el;
+  }
+
+  function addQuickReplies(items){
+    const wrap = document.createElement('div');
+    wrap.className = 'chat-quick';
+    items.forEach(item => {
+      const btn = document.createElement('button');
+      btn.className = 'chat-chip';
+      btn.textContent = item.q;
+      btn.addEventListener('click', () => {
+        wrap.remove();
+        handleUserMessage(item.q);
+      });
+      wrap.appendChild(btn);
+    });
+    body.appendChild(wrap);
+    scrollToBottom();
+  }
+
+  function showTyping(){
+    const el = document.createElement('div');
+    el.className = 'chat-typing';
+    el.id = 'chatTypingIndicator';
+    el.innerHTML = '<span></span><span></span><span></span>';
+    body.appendChild(el);
+    scrollToBottom();
+    return el;
+  }
+  function hideTyping(){
+    const el = document.getElementById('chatTypingIndicator');
+    if(el) el.remove();
+  }
+
+  function botReply(text, cb){
+    showTyping();
+    setTimeout(() => {
+      hideTyping();
+      addBubble(text, 'bot');
+      if(cb) cb();
+    }, 550 + Math.random()*350);
+  }
+
+  function isHumanRequest(msg){
+    const lower = msg.toLowerCase();
+    return HUMAN_TRIGGERS.some(t => lower.includes(t));
+  }
+
+  function matchFAQ(msg){
+    const lower = msg.toLowerCase();
+    for(const item of FAQ){
+      if(item.keys.some(k => lower.includes(k))) return item.a;
+    }
+    return null;
+  }
+
+  function sendEscalationEmail(reason, messageText){
+    const subject = `Chat handoff — ${visitor.name} needs a human`;
+    const details = `Name: ${visitor.name}\nEmail: ${visitor.email}\nReason: ${reason}\n\nMessage:\n${messageText}`;
+
+    if(EMAILJS_READY && window.emailjs){
+      emailjs.send(EMAILJS_SERVICE_ID, EMAILJS_TEMPLATE_ID, {
+        from_name: visitor.name,
+        from_email: visitor.email,
+        message: details,
+        to_email: CONTACT_EMAIL
+      }).catch(() => { fallbackMailto(subject, details); });
+    } else {
+      fallbackMailto(subject, details);
+    }
+  }
+
+  function fallbackMailto(subject, details){
+    const url = `mailto:${CONTACT_EMAIL}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(details)}`;
+    window.location.href = url;
+  }
+
+  function handleUserMessage(msg){
+    addBubble(msg, 'user');
+
+    if(isHumanRequest(msg)){
+      botReply(`Of course, ${visitor.name.split(' ')[0]} — I've forwarded this to our team. They'll follow up at ${visitor.email} shortly.`);
+      sendEscalationEmail('Visitor requested a human', msg);
+      return;
+    }
+
+    const answer = matchFAQ(msg);
+    if(answer){
+      botReply(answer, () => addQuickReplies(QUICK_REPLIES));
+    } else {
+      botReply(`That's a great question — I don't want to guess on this one, so I've sent it straight to our team. They'll email you at ${visitor.email} shortly.`);
+      sendEscalationEmail('AI could not confidently answer', msg);
+    }
+  }
+
+  function beginChat(){
+    stage = 'chatting';
+    input.disabled = false;
+    input.placeholder = 'Type your message...';
+    botReply(`Great to meet you, ${visitor.name.split(' ')[0]}! I'm here to help with questions about your book marketing campaign. Pick a question below, or type your own — and if you'd rather talk to a real person any time, just say so.`, () => addQuickReplies(QUICK_REPLIES));
+  }
+
+  function startIntake(){
+    input.disabled = true;
+    input.placeholder = 'Type your name...';
+    addBubble("Hi there 👋 Before we get chatting, what's your name?", 'bot');
+    input.disabled = false;
+    input.focus();
+  }
+
+  function handleIntake(msg){
+    if(stage === 'ask_name'){
+      visitor.name = msg;
+      addBubble(msg, 'user');
+      stage = 'ask_email';
+      input.placeholder = 'Type your email...';
+      botReply(`Nice to meet you, ${msg.split(' ')[0]}! What's the best email to reach you at?`);
+      return;
+    }
+    if(stage === 'ask_email'){
+      const emailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+      if(!emailPattern.test(msg.trim())){
+        addBubble(msg, 'user');
+        botReply("That doesn't quite look like a valid email — mind double-checking it?");
+        return;
+      }
+      visitor.email = msg.trim();
+      addBubble(msg, 'user');
+      beginChat();
+      return;
+    }
+  }
+
+  function sendMessage(){
+    const msg = input.value.trim();
+    if(!msg) return;
+    input.value = '';
+    if(stage === 'chatting'){
+      handleUserMessage(msg);
+    } else {
+      handleIntake(msg);
+    }
   }
 
   launcher.addEventListener('click', () => {
     const isOpen = panel.classList.toggle('open');
     launcher.classList.toggle('open', isOpen);
-    if(isOpen) setTimeout(() => input.focus(), 300);
+    if(isOpen){
+      setTimeout(() => input.focus(), 300);
+      if(body.children.length === 0) startIntake();
+    }
   });
-
-  // quick-reply chips: simulate a conversation
-  document.querySelectorAll('.chat-chip').forEach(chip => {
-    chip.addEventListener('click', () => {
-      addBubble(chip.dataset.q, 'user');
-      setTimeout(() => addBubble(chip.dataset.a, 'bot'), 450);
-    });
-  });
-
-  function sendMessage(){
-    const msg = input.value.trim();
-    if(!msg) return;
-    addBubble(msg, 'user');
-    input.value = '';
-    setTimeout(() => {
-      addBubble("Thanks! I've opened your email app so you can send that straight to our team — we'll reply within a day.", 'bot');
-      const subject = encodeURIComponent('New message from website chat');
-      const emailBody = encodeURIComponent(`Hi Luminary Press,\n\n${msg}\n\n— Sent via website chat`);
-      window.location.href = `mailto:${CONTACT_EMAIL}?subject=${subject}&body=${emailBody}`;
-    }, 450);
-  }
 
   sendBtn.addEventListener('click', sendMessage);
   input.addEventListener('keydown', e => { if(e.key === 'Enter') sendMessage(); });
